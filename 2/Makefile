@@ -5,7 +5,7 @@ LDFLAGS := -lpthread
 TARGET := test_ipk_rdt
 SRC := test_ipk_rdt.c
 
-.PHONY: all clean run
+.PHONY: all clean run cppcheck
 
 all: $(TARGET)
 
@@ -14,6 +14,9 @@ $(TARGET): $(SRC)
 
 run: $(TARGET)
 	./$(TARGET)
+
+cppcheck:
+	cppcheck --enable=all --std=c99 --suppress=missingIncludeSystem --check-level=exhaustive --enable=all --inconclusive .
 
 clean:
 	rm -f $(TARGET)
