@@ -25,8 +25,8 @@ This service is intended for validating L4 scanner behavior, including IPv6 test
 ### Platform Notes
 
 - Linux: use FITVPN and interface `tun0`.
-- Windows + WSL2: install FITVPN on host and in WSL; use `tun0`.
-- Windows + QEMU VM: install FITVPN on host only; VM interface name may vary.
+- Windows + WSL2: install FITVPN on host and in WSL; use `tun0`. UDP may be broken due to VPN configuration.
+- Windows + QEMU VM: install FITVPN on host only; VM interface name may vary. **Preferred!**
 
 ## Project 2: IPK-RDT Test Harness
 

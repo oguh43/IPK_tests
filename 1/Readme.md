@@ -11,9 +11,9 @@ Congratulations, just use FITVPN and you are set! Don't forget to use the interf
 ### Windows
 
 #### WSL2
-Install FITVPN on your host OS **AND** inside wsl itself. Use interface `tun0`.
+Install FITVPN on your host OS **AND** inside wsl itself. Use interface `tun0`. UDP may be broken due to VPN configuration.
 
-#### QUEMU VM
+#### QUEMU VM - preferred
 Install FITVPN only on your host OS. Interace will remain unchanged (for example: `enp6s0`).
 
 
