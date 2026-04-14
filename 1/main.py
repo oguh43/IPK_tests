@@ -1126,8 +1126,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         Discord: <a href="https://discord.com/users/414505536936214531" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">_.miau._</a>
         <div class="target-switch">
             <div class="target-presets">
-                <a class="target-preset {preset_vpn_ip_active}" href="/?target_mode=ip">VPN IP</a>
+                <a class="target-preset {preset_vpn_ip_active}" href="/?target_mode=ip">VPN IPv4</a>
                 <a class="target-preset {preset_vpn_address_active}" href="/?target_mode=address">VPN ADDRESS</a>
+                <a class="target-preset {preset_vpn_ipv6_active}" href="/?target_mode=ipv6">VPN IPv6</a>
             </div>
         </div>
     </div>
@@ -1813,7 +1814,7 @@ def normalize_target_selection(network, target_mode):
     mode = (target_mode or "ip").strip().lower()
     if net != "vpn":
         net = "vpn"
-    if mode not in ("ip", "address"):
+    if mode not in ("ip", "address", "ipv6"):
         mode = "ip"
     return net, mode
 
@@ -1822,6 +1823,8 @@ def resolve_scan_target(network, target_mode):
     net, mode = normalize_target_selection(network, target_mode)
     if mode == "address":
         return VPN_ADDR
+    if mode == "ipv6":
+        return SERVER_IPV6 or TARGET_HOST
     return VPN_HOST or TARGET_HOST
 
 
@@ -1913,9 +1916,10 @@ class Handler(BaseHTTPRequestHandler):
                     target_host=selected_target,
                     selected_target=selected_target,
                     selected_network_label="VPN",
-                    selected_mode_label="IP" if selected_mode == "ip" else "ADDRESS",
+                    selected_mode_label="IP" if selected_mode == "ip" else ("ADDRESS" if selected_mode == "address" else "IPV6"),
                     preset_vpn_ip_active="active" if selected_mode == "ip" else "",
                     preset_vpn_address_active="active" if selected_mode == "address" else "",
+                    preset_vpn_ipv6_active="active" if selected_mode == "ipv6" else "",
                     vpn_host=VPN_HOST or "none detected",
                     target_ipv6=SERVER_IPV6 or "none detected",
                     interface=VPN_INTERFACE,
