@@ -987,7 +987,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
     <title>L4 Scanner Test Environment</title>
-    <meta http-equiv="refresh" content="10;url={refresh_url}">
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }}
@@ -1121,8 +1120,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         Target IPv6: <span>{target_ipv6}</span> |
         Active target: <span>{selected_target}</span> ({selected_network_label} / {selected_mode_label}) |
         Randomized range: <span>{rand_start}-{rand_end}</span> |
-        Last refresh: <span>{last_refresh}</span> |
-        Next refresh: <span>{next_refresh}</span> |
+        Last refresh: <span id="last-refresh-value">{last_refresh}</span> |
+        Next refresh: <span id="next-refresh-value">{next_refresh}</span> |
         Discord: <a href="https://discord.com/users/414505536936214531" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">_.miau._</a>
         <div class="target-switch">
             <div class="target-presets">
@@ -1137,14 +1136,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <h2>Incoming Scanners</h2>
         <div class="card">
             <details class="collapsible">
-                <summary class="collapsible-summary">ACTIVE SCANNERS ({scanner_count})</summary>
-                <div class="collapsible-body">{scanner_table}</div>
+                <summary id="active-scanners-summary" class="collapsible-summary">ACTIVE SCANNERS ({scanner_count})</summary>
+                <div id="scanner-table-container" class="collapsible-body">{scanner_table}</div>
             </details>
         </div>
     </div>
 
     <div class="section">
-        <h2>Recent Activity ({log_count} packets)</h2>
+        <h2 id="recent-activity-heading">Recent Activity ({log_count} packets)</h2>
         <div class="card">
             <h2 class="log">PACKET LOG</h2>
             <div class="log-controls">
@@ -1152,7 +1151,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <button id="logFilterClear" class="log-btn" type="button">Clear filter</button>
                 <span id="logFilterStatus" class="log-status"></span>
             </div>
-            <div class="log-table">{log_table}</div>
+            <div id="log-table-container" class="log-table">{log_table}</div>
         </div>
     </div>
 
@@ -1560,6 +1559,108 @@ curl http://{target_host}:{web_port}/api/tests       # test scenarios</pre>
             const logInput = document.getElementById("logFilterInput");
             const clearBtn = document.getElementById("logFilterClear");
             const status = document.getElementById("logFilterStatus");
+            const refreshLastEl = document.getElementById("last-refresh-value");
+            const refreshNextEl = document.getElementById("next-refresh-value");
+            const scannerSummaryEl = document.getElementById("active-scanners-summary");
+            const scannerTableEl = document.getElementById("scanner-table-container");
+            const recentActivityEl = document.getElementById("recent-activity-heading");
+            const logTableEl = document.getElementById("log-table-container");
+
+            const escapeHtml = (value) => {{
+                return String(value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/\"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }};
+
+            const renderScannerTable = (summary) => {{
+                const entries = Object.entries(summary || {{}});
+                if (!entries.length) {{
+                    return "<div class='count'>No scanners detected yet</div>";
+                }}
+
+                entries.sort((a, b) => (b[1]?.last_seen || "").localeCompare(a[1]?.last_seen || ""));
+                const rows = entries.map(([ip, info]) => {{
+                    const firstSeen = escapeHtml(info?.first_seen || "");
+                    const lastSeen = escapeHtml(info?.last_seen || "");
+                    return "<tr>" +
+                        `<td class='ip-highlight'>${{escapeHtml(ip)}}</td>` +
+                        `<td>${{firstSeen}}</td>` +
+                        `<td>${{lastSeen}}</td>` +
+                        `<td class='proto-tcp'>${{Number(info?.tcp_count || 0)}}</td>` +
+                        `<td class='proto-udp'>${{Number(info?.udp_count || 0)}}</td>` +
+                        `<td>${{Number(info?.unique_ports || 0)}}</td>` +
+                        "</tr>";
+                }}).join("");
+
+                return "<table><tr><th>Source IP</th><th>First seen</th><th>Last seen</th><th>TCP</th><th>UDP</th><th>Ports</th></tr>" + rows + "</table>";
+            }};
+
+            const renderLogTable = (entries) => {{
+                const rows = Array.isArray(entries) ? entries.slice(-100).reverse() : [];
+                if (!rows.length) {{
+                    return "<div class='count'>No packets captured yet</div>";
+                }}
+
+                const body = rows.map((entry) => {{
+                    const proto = (entry?.proto || "").toUpperCase();
+                    const protoClass = proto === "TCP" ? "proto-tcp" : "proto-udp";
+                    const time = escapeHtml(entry?.time || "");
+                    const srcIp = escapeHtml(entry?.src_ip || "");
+                    const srcPort = escapeHtml(entry?.src_port || "");
+                    const dstPort = escapeHtml(entry?.dst_port || "");
+                    const flags = escapeHtml(entry?.flags || "");
+                    const protoText = escapeHtml(proto);
+                    const searchBlob = `${{time}} ${{srcIp}} ${{srcPort}} ${{dstPort}} ${{protoText}} ${{flags}}`.toLowerCase();
+
+                    return `<tr data-search='${{escapeHtml(searchBlob)}}'><td>${{time}}</td><td class='ip-highlight'>${{srcIp}}</td><td>${{srcPort}}</td><td>${{dstPort}}</td><td class='${{protoClass}}'>${{protoText}}</td><td>${{flags}}</td></tr>`;
+                }}).join("");
+
+                return "<table id='packet-log-table'><thead><tr><th>Time</th><th>Source</th><th>SPort</th><th>DPort</th><th>Proto</th><th>Flags</th></tr></thead><tbody>" + body + "</tbody></table>";
+            }};
+
+            const refreshLiveData = async () => {{
+                try {{
+                    const [stateResp, scannersResp, logResp] = await Promise.all([
+                        fetch("/api/state", {{ cache: "no-store" }}),
+                        fetch("/api/scanners", {{ cache: "no-store" }}),
+                        fetch("/api/log", {{ cache: "no-store" }}),
+                    ]);
+
+                    if (!stateResp.ok || !scannersResp.ok || !logResp.ok) {{
+                        return;
+                    }}
+
+                    const stateData = await stateResp.json();
+                    const scannersData = await scannersResp.json();
+                    const logData = await logResp.json();
+
+                    if (refreshLastEl) refreshLastEl.textContent = stateData?.last_refresh || "never";
+                    if (refreshNextEl) refreshNextEl.textContent = stateData?.next_refresh || "pending";
+
+                    if (scannerSummaryEl) {{
+                        const scannerCount = Object.keys(scannersData || {{}}).length;
+                        scannerSummaryEl.textContent = `ACTIVE SCANNERS (${{scannerCount}})`;
+                    }}
+                    if (scannerTableEl) {{
+                        scannerTableEl.innerHTML = renderScannerTable(scannersData);
+                    }}
+
+                    const logCount = Array.isArray(logData) ? Math.min(100, logData.length) : 0;
+                    if (recentActivityEl) {{
+                        recentActivityEl.textContent = `Recent Activity (${{logCount}} packets)`;
+                    }}
+                    if (logTableEl) {{
+                        logTableEl.innerHTML = renderLogTable(logData);
+                    }}
+
+                    applyLogFilter();
+                }} catch (_) {{
+                    // Keep current content when refresh fails.
+                }}
+            }};
 
             const applyLogFilter = () => {{
                 const tableRows = document.querySelectorAll("#packet-log-table tbody tr");
@@ -1596,6 +1697,7 @@ curl http://{target_host}:{web_port}/api/tests       # test scenarios</pre>
             }}
 
             applyLogFilter();
+            setInterval(refreshLiveData, 10000);
         }})();
     </script>
 </body>
