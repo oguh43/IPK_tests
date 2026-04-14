@@ -1122,7 +1122,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         Randomized range: <span>{rand_start}-{rand_end}</span> |
         Last refresh: <span id="last-refresh-value">{last_refresh}</span> |
         Next refresh: <span id="next-refresh-value">{next_refresh}</span> |
-        Discord: <a href="https://discord.com/users/414505536936214531" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">_.miau._</a>
+        Discord: <a href="https://discord.com/users/414505536936214531" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">_.miau._</a> |
+        <a href="https://github.com/oguh43/IPK_tests" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">Github repo</a>
         <div class="target-switch">
             <div class="target-presets">
                 <a class="target-preset {preset_vpn_ip_active}" href="/?target_mode=ip">VPN IPv4</a>
