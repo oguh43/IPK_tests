@@ -544,7 +544,7 @@ def build_test_scenarios(target_host):
     """Build test commands matching last year's automated test patterns.
     Each group has a 'location': 'remote' (needs test server) or 'local' (run on scanner machine)."""
     T = target_host
-    I = INTERFACE
+    I = VPN_INTERFACE
 
     scenarios = []
 
@@ -1918,7 +1918,7 @@ class Handler(BaseHTTPRequestHandler):
                     preset_vpn_address_active="active" if selected_mode == "address" else "",
                     vpn_host=VPN_HOST or "none detected",
                     target_ipv6=SERVER_IPV6 or "none detected",
-                    interface=INTERFACE,
+                    interface=VPN_INTERFACE,
                     last_refresh=state["last_refresh"] or "never",
                     next_refresh=state["next_refresh"] or "pending",
                     web_port=WEB_PORT,
