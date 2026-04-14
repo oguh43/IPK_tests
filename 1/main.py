@@ -1492,12 +1492,34 @@ if __name__ == "__main__":
 
     <div class="section">
         <h2>JSON API</h2>
-        <div class="cmd">
-            <pre>curl "http://{api_ipv4_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"      # port state
-curl "http://{api_ipv4_host}:{web_port}/api/scanners"   # scanner summary
-curl "http://{api_ipv4_host}:{web_port}/api/log"         # packet log
-curl "http://{api_ipv4_host}:{web_port}/api/tests?network={selected_network_value}&target_mode={selected_mode_value}"       # test scenarios (active preset)</pre>
-            <div class="copy-hint">Click any command or code snippet to copy</div>
+        <div class="grid">
+            <div class="cmd">
+                <span class="label"># Port state (active preset):</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Scanner summary:</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/scanners"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Packet log:</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/log"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Test scenarios (active preset):</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/tests?network={selected_network_value}&target_mode={selected_mode_value}"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Test mode switch URLs:</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/tests?network=vpn&target_mode=ip"
+curl "http://{api_ipv4_host}:{web_port}/api/tests?network=vpn&target_mode=address"
+curl "http://{api_ipv4_host}:{web_port}/api/tests?network=vpn&target_mode=ipv6"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
         </div>
     </div>
     <script>
