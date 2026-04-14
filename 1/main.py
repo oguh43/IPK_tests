@@ -1229,7 +1229,7 @@ Usage: sudo ./ipk-L4-scan -i {interface} -t 9001-9053 -u 9031-9053 {target_host}
 \"\"\"
 import json, sys, urllib.request
 
-API = "http://{api_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"
+API = "http://{api_ipv4_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"
 state = json.loads(urllib.request.urlopen(API).read())
 
 # Build lookup: all guaranteed + randomized ports
@@ -1308,7 +1308,7 @@ sys.exit(1 if fail > 0 else 0)</pre>
 \"\"\"Run test scenarios from /api/tests and verify outputs.
 
 Usage:
-    python3 run_tests_from_api.py --base-url http://{api_host}:{web_port}
+    python3 run_tests_from_api.py --base-url http://{api_ipv4_host}:{web_port}
 
 Notes:
 - Requires scanner binary available for commands in /api/tests.
@@ -1422,7 +1422,7 @@ def iter_tests(scenarios, location_filter):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://{api_host}:{web_port}")
+    ap.add_argument("--base-url", default="http://{api_ipv4_host}:{web_port}")
     ap.add_argument("--location", choices=["remote", "local", "all"], default="remote")
     ap.add_argument("--network", choices=["vpn"], default="{selected_network_value}")
     ap.add_argument("--target-mode", choices=["ip", "address", "ipv6"], default="{selected_mode_value}")
@@ -1482,21 +1482,21 @@ if __name__ == "__main__":
         </div>
         <div class="cmd">
             <span class="label"># Run remote tests only (default):</span>
-            <pre>python3 run_tests_from_api.py --base-url http://{api_host}:{web_port} --target-mode {selected_mode_value}</pre>
+            <pre>python3 run_tests_from_api.py --base-url http://{api_ipv4_host}:{web_port} --target-mode {selected_mode_value}</pre>
         </div>
         <div class="cmd">
             <span class="label"># Run remote tests from API and stop on first failure:</span>
-            <pre>python3 run_tests_from_api.py --base-url http://{api_host}:{web_port} --target-mode {selected_mode_value} --location remote --stop-on-fail</pre>
+            <pre>python3 run_tests_from_api.py --base-url http://{api_ipv4_host}:{web_port} --target-mode {selected_mode_value} --location remote --stop-on-fail</pre>
         </div>
     </div>
 
     <div class="section">
         <h2>JSON API</h2>
         <div class="cmd">
-            <pre>curl "http://{api_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"      # port state
-curl "http://{api_host}:{web_port}/api/scanners"   # scanner summary
-curl "http://{api_host}:{web_port}/api/log"         # packet log
-curl "http://{api_host}:{web_port}/api/tests?network={selected_network_value}&target_mode={selected_mode_value}"       # test scenarios (active preset)</pre>
+            <pre>curl "http://{api_ipv4_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"      # port state
+curl "http://{api_ipv4_host}:{web_port}/api/scanners"   # scanner summary
+curl "http://{api_ipv4_host}:{web_port}/api/log"         # packet log
+curl "http://{api_ipv4_host}:{web_port}/api/tests?network={selected_network_value}&target_mode={selected_mode_value}"       # test scenarios (active preset)</pre>
             <div class="copy-hint">Click any command or code snippet to copy</div>
         </div>
     </div>
@@ -2018,14 +2018,12 @@ class Handler(BaseHTTPRequestHandler):
                     scanner_count = len(ip_summary)
                     log_count = min(MAX_LOG_WEB, len(conn_log))
 
-                api_host = selected_target
-                if ":" in api_host and not api_host.startswith("["):
-                    api_host = f"[{api_host}]"
+                api_ipv4_host = VPN_HOST or TARGET_HOST
 
                 html = HTML_TEMPLATE.format(
                     refresh_url=build_refresh_url(selected_network, selected_mode),
                     target_host=selected_target,
-                    api_host=api_host,
+                    api_ipv4_host=api_ipv4_host,
                     selected_target=selected_target,
                     selected_network_value=selected_network,
                     selected_mode_value=selected_mode,
