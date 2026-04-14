@@ -1229,7 +1229,7 @@ Usage: sudo ./ipk-L4-scan -i {interface} -t 9001-9053 -u 9031-9053 {target_host}
 \"\"\"
 import json, sys, urllib.request
 
-API = "http://{target_host}:{web_port}/api/state"
+API = "http://{api_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"
 state = json.loads(urllib.request.urlopen(API).read())
 
 # Build lookup: all guaranteed + randomized ports
@@ -1308,7 +1308,7 @@ sys.exit(1 if fail > 0 else 0)</pre>
 \"\"\"Run test scenarios from /api/tests and verify outputs.
 
 Usage:
-  python3 run_tests_from_api.py --base-url http://{target_host}:{web_port}
+    python3 run_tests_from_api.py --base-url http://{api_host}:{web_port}
 
 Notes:
 - Requires scanner binary available for commands in /api/tests.
@@ -1323,6 +1323,7 @@ import shlex
 import subprocess
 import sys
 import urllib.request
+import urllib.parse
 
 
 SCAN_LINE_RE = re.compile(r"^(\\S+)\\s+(\\d+)\\s+(tcp|udp)\\s+(open|closed|filtered)\\s*$", re.IGNORECASE)
@@ -1421,14 +1422,17 @@ def iter_tests(scenarios, location_filter):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://{target_host}:{web_port}")
+    ap.add_argument("--base-url", default="http://{api_host}:{web_port}")
     ap.add_argument("--location", choices=["remote", "local", "all"], default="remote")
+    ap.add_argument("--network", choices=["vpn"], default="{selected_network_value}")
+    ap.add_argument("--target-mode", choices=["ip", "address", "ipv6"], default="{selected_mode_value}")
     ap.add_argument("--timeout", type=int, default=20, help="Per-test timeout in seconds")
     ap.add_argument("--stop-on-fail", action="store_true")
     args = ap.parse_args()
 
-    tests_api = args.base_url.rstrip("/") + "/api/tests"
-    state_api = args.base_url.rstrip("/") + "/api/state"
+    query = urllib.parse.urlencode({"network": args.network, "target_mode": args.target_mode})
+    tests_api = args.base_url.rstrip("/") + "/api/tests?" + query
+    state_api = args.base_url.rstrip("/") + "/api/state?" + query
 
     scenarios = fetch_json(tests_api)
     state = fetch_json(state_api)
@@ -1478,21 +1482,21 @@ if __name__ == "__main__":
         </div>
         <div class="cmd">
             <span class="label"># Run remote tests only (default):</span>
-            <pre>python3 run_tests_from_api.py --base-url http://{target_host}:{web_port}</pre>
+            <pre>python3 run_tests_from_api.py --base-url http://{api_host}:{web_port} --target-mode {selected_mode_value}</pre>
         </div>
         <div class="cmd">
             <span class="label"># Run remote tests from API and stop on first failure:</span>
-            <pre>python3 run_tests_from_api.py --base-url http://{target_host}:{web_port} --location remote --stop-on-fail</pre>
+            <pre>python3 run_tests_from_api.py --base-url http://{api_host}:{web_port} --target-mode {selected_mode_value} --location remote --stop-on-fail</pre>
         </div>
     </div>
 
     <div class="section">
         <h2>JSON API</h2>
         <div class="cmd">
-            <pre>curl http://{target_host}:{web_port}/api/state      # port state
-curl http://{target_host}:{web_port}/api/scanners   # scanner summary
-curl http://{target_host}:{web_port}/api/log         # packet log
-curl http://{target_host}:{web_port}/api/tests       # test scenarios</pre>
+            <pre>curl "http://{api_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"      # port state
+curl "http://{api_host}:{web_port}/api/scanners"   # scanner summary
+curl "http://{api_host}:{web_port}/api/log"         # packet log
+curl "http://{api_host}:{web_port}/api/tests?network={selected_network_value}&target_mode={selected_mode_value}"       # test scenarios (active preset)</pre>
             <div class="copy-hint">Click any command or code snippet to copy</div>
         </div>
     </div>
@@ -2014,10 +2018,17 @@ class Handler(BaseHTTPRequestHandler):
                     scanner_count = len(ip_summary)
                     log_count = min(MAX_LOG_WEB, len(conn_log))
 
+                api_host = selected_target
+                if ":" in api_host and not api_host.startswith("["):
+                    api_host = f"[{api_host}]"
+
                 html = HTML_TEMPLATE.format(
                     refresh_url=build_refresh_url(selected_network, selected_mode),
                     target_host=selected_target,
+                    api_host=api_host,
                     selected_target=selected_target,
+                    selected_network_value=selected_network,
+                    selected_mode_value=selected_mode,
                     selected_network_label="VPN",
                     selected_mode_label="IP" if selected_mode == "ip" else ("ADDRESS" if selected_mode == "address" else "IPV6"),
                     preset_vpn_ip_active="active" if selected_mode == "ip" else "",
