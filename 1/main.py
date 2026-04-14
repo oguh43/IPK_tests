@@ -1430,7 +1430,7 @@ def main():
     ap.add_argument("--stop-on-fail", action="store_true")
     args = ap.parse_args()
 
-    query = urllib.parse.urlencode({"network": args.network, "target_mode": args.target_mode})
+    query = urllib.parse.urlencode({{"network": args.network, "target_mode": args.target_mode}})
     tests_api = args.base_url.rstrip("/") + "/api/tests?" + query
     state_api = args.base_url.rstrip("/") + "/api/state?" + query
 
