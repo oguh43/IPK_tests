@@ -544,7 +544,7 @@ def build_test_scenarios(target_host):
     """Build test commands matching last year's automated test patterns.
     Each group has a 'location': 'remote' (needs test server) or 'local' (run on scanner machine)."""
     T = target_host
-    I = INTERFACE
+    I = VPN_INTERFACE
 
     scenarios = []
 
@@ -987,7 +987,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
     <title>L4 Scanner Test Environment</title>
-    <meta http-equiv="refresh" content="10;url={refresh_url}">
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }}
@@ -1121,13 +1120,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         Target IPv6: <span>{target_ipv6}</span> |
         Active target: <span>{selected_target}</span> ({selected_network_label} / {selected_mode_label}) |
         Randomized range: <span>{rand_start}-{rand_end}</span> |
-        Last refresh: <span>{last_refresh}</span> |
-        Next refresh: <span>{next_refresh}</span> |
-        Discord: <a href="https://discord.com/users/414505536936214531" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">_.miau._</a>
+        Last refresh: <span id="last-refresh-value">{last_refresh}</span> |
+        Next refresh: <span id="next-refresh-value">{next_refresh}</span> |
+        Discord: <a href="https://discord.com/users/414505536936214531" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">_.miau._</a> |
+        <a href="https://github.com/oguh43/IPK_tests" target="_blank" rel="noopener noreferrer" style="color:#00d4ff;">Github repo</a>
         <div class="target-switch">
             <div class="target-presets">
-                <a class="target-preset {preset_vpn_ip_active}" href="/?target_mode=ip">VPN IP</a>
+                <a class="target-preset {preset_vpn_ip_active}" href="/?target_mode=ip">VPN IPv4</a>
                 <a class="target-preset {preset_vpn_address_active}" href="/?target_mode=address">VPN ADDRESS</a>
+                <a class="target-preset {preset_vpn_ipv6_active}" href="/?target_mode=ipv6">VPN IPv6</a>
             </div>
         </div>
     </div>
@@ -1136,14 +1137,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <h2>Incoming Scanners</h2>
         <div class="card">
             <details class="collapsible">
-                <summary class="collapsible-summary">ACTIVE SCANNERS ({scanner_count})</summary>
-                <div class="collapsible-body">{scanner_table}</div>
+                <summary id="active-scanners-summary" class="collapsible-summary">ACTIVE SCANNERS ({scanner_count})</summary>
+                <div id="scanner-table-container" class="collapsible-body">{scanner_table}</div>
             </details>
         </div>
     </div>
 
     <div class="section">
-        <h2>Recent Activity ({log_count} packets)</h2>
+        <h2 id="recent-activity-heading">Recent Activity ({log_count} packets)</h2>
         <div class="card">
             <h2 class="log">PACKET LOG</h2>
             <div class="log-controls">
@@ -1151,7 +1152,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <button id="logFilterClear" class="log-btn" type="button">Clear filter</button>
                 <span id="logFilterStatus" class="log-status"></span>
             </div>
-            <div class="log-table">{log_table}</div>
+            <div id="log-table-container" class="log-table">{log_table}</div>
         </div>
     </div>
 
@@ -1228,7 +1229,7 @@ Usage: sudo ./ipk-L4-scan -i {interface} -t 9001-9053 -u 9031-9053 {target_host}
 \"\"\"
 import json, sys, urllib.request
 
-API = "http://{target_host}:{web_port}/api/state"
+API = "http://{api_ipv4_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"
 state = json.loads(urllib.request.urlopen(API).read())
 
 # Build lookup: all guaranteed + randomized ports
@@ -1307,7 +1308,7 @@ sys.exit(1 if fail > 0 else 0)</pre>
 \"\"\"Run test scenarios from /api/tests and verify outputs.
 
 Usage:
-  python3 run_tests_from_api.py --base-url http://{target_host}:{web_port}
+    python3 run_tests_from_api.py --base-url http://{api_ipv4_host}:{web_port}
 
 Notes:
 - Requires scanner binary available for commands in /api/tests.
@@ -1322,6 +1323,7 @@ import shlex
 import subprocess
 import sys
 import urllib.request
+import urllib.parse
 
 
 SCAN_LINE_RE = re.compile(r"^(\\S+)\\s+(\\d+)\\s+(tcp|udp)\\s+(open|closed|filtered)\\s*$", re.IGNORECASE)
@@ -1420,14 +1422,17 @@ def iter_tests(scenarios, location_filter):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://{target_host}:{web_port}")
+    ap.add_argument("--base-url", default="http://{api_ipv4_host}:{web_port}")
     ap.add_argument("--location", choices=["remote", "local", "all"], default="remote")
+    ap.add_argument("--network", choices=["vpn"], default="{selected_network_value}")
+    ap.add_argument("--target-mode", choices=["ip", "address", "ipv6"], default="{selected_mode_value}")
     ap.add_argument("--timeout", type=int, default=20, help="Per-test timeout in seconds")
     ap.add_argument("--stop-on-fail", action="store_true")
     args = ap.parse_args()
 
-    tests_api = args.base_url.rstrip("/") + "/api/tests"
-    state_api = args.base_url.rstrip("/") + "/api/state"
+    query = urllib.parse.urlencode({{"network": args.network, "target_mode": args.target_mode}})
+    tests_api = args.base_url.rstrip("/") + "/api/tests?" + query
+    state_api = args.base_url.rstrip("/") + "/api/state?" + query
 
     scenarios = fetch_json(tests_api)
     state = fetch_json(state_api)
@@ -1477,22 +1482,44 @@ if __name__ == "__main__":
         </div>
         <div class="cmd">
             <span class="label"># Run remote tests only (default):</span>
-            <pre>python3 run_tests_from_api.py --base-url http://{target_host}:{web_port}</pre>
+            <pre>python3 run_tests_from_api.py --base-url http://{api_ipv4_host}:{web_port} --target-mode {selected_mode_value}</pre>
         </div>
         <div class="cmd">
             <span class="label"># Run remote tests from API and stop on first failure:</span>
-            <pre>python3 run_tests_from_api.py --base-url http://{target_host}:{web_port} --location remote --stop-on-fail</pre>
+            <pre>python3 run_tests_from_api.py --base-url http://{api_ipv4_host}:{web_port} --target-mode {selected_mode_value} --location remote --stop-on-fail</pre>
         </div>
     </div>
 
     <div class="section">
         <h2>JSON API</h2>
-        <div class="cmd">
-            <pre>curl http://{target_host}:{web_port}/api/state      # port state
-curl http://{target_host}:{web_port}/api/scanners   # scanner summary
-curl http://{target_host}:{web_port}/api/log         # packet log
-curl http://{target_host}:{web_port}/api/tests       # test scenarios</pre>
-            <div class="copy-hint">Click any command or code snippet to copy</div>
+        <div class="grid">
+            <div class="cmd">
+                <span class="label"># Port state (active preset):</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/state?network={selected_network_value}&target_mode={selected_mode_value}"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Scanner summary:</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/scanners"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Packet log:</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/log"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Test scenarios (active preset):</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/tests?network={selected_network_value}&target_mode={selected_mode_value}"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
+            <div class="cmd">
+                <span class="label"># Test mode switch URLs:</span>
+                <pre>curl "http://{api_ipv4_host}:{web_port}/api/tests?network=vpn&target_mode=ip"
+curl "http://{api_ipv4_host}:{web_port}/api/tests?network=vpn&target_mode=address"
+curl "http://{api_ipv4_host}:{web_port}/api/tests?network=vpn&target_mode=ipv6"</pre>
+                <div class="copy-hint">Click any command or code snippet to copy</div>
+            </div>
         </div>
     </div>
     <script>
@@ -1559,6 +1586,108 @@ curl http://{target_host}:{web_port}/api/tests       # test scenarios</pre>
             const logInput = document.getElementById("logFilterInput");
             const clearBtn = document.getElementById("logFilterClear");
             const status = document.getElementById("logFilterStatus");
+            const refreshLastEl = document.getElementById("last-refresh-value");
+            const refreshNextEl = document.getElementById("next-refresh-value");
+            const scannerSummaryEl = document.getElementById("active-scanners-summary");
+            const scannerTableEl = document.getElementById("scanner-table-container");
+            const recentActivityEl = document.getElementById("recent-activity-heading");
+            const logTableEl = document.getElementById("log-table-container");
+
+            const escapeHtml = (value) => {{
+                return String(value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/\"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }};
+
+            const renderScannerTable = (summary) => {{
+                const entries = Object.entries(summary || {{}});
+                if (!entries.length) {{
+                    return "<div class='count'>No scanners detected yet</div>";
+                }}
+
+                entries.sort((a, b) => (b[1]?.last_seen || "").localeCompare(a[1]?.last_seen || ""));
+                const rows = entries.map(([ip, info]) => {{
+                    const firstSeen = escapeHtml(info?.first_seen || "");
+                    const lastSeen = escapeHtml(info?.last_seen || "");
+                    return "<tr>" +
+                        `<td class='ip-highlight'>${{escapeHtml(ip)}}</td>` +
+                        `<td>${{firstSeen}}</td>` +
+                        `<td>${{lastSeen}}</td>` +
+                        `<td class='proto-tcp'>${{Number(info?.tcp_count || 0)}}</td>` +
+                        `<td class='proto-udp'>${{Number(info?.udp_count || 0)}}</td>` +
+                        `<td>${{Number(info?.unique_ports || 0)}}</td>` +
+                        "</tr>";
+                }}).join("");
+
+                return "<table><tr><th>Source IP</th><th>First seen</th><th>Last seen</th><th>TCP</th><th>UDP</th><th>Ports</th></tr>" + rows + "</table>";
+            }};
+
+            const renderLogTable = (entries) => {{
+                const rows = Array.isArray(entries) ? entries.slice(-100).reverse() : [];
+                if (!rows.length) {{
+                    return "<div class='count'>No packets captured yet</div>";
+                }}
+
+                const body = rows.map((entry) => {{
+                    const proto = (entry?.proto || "").toUpperCase();
+                    const protoClass = proto === "TCP" ? "proto-tcp" : "proto-udp";
+                    const time = escapeHtml(entry?.time || "");
+                    const srcIp = escapeHtml(entry?.src_ip || "");
+                    const srcPort = escapeHtml(entry?.src_port || "");
+                    const dstPort = escapeHtml(entry?.dst_port || "");
+                    const flags = escapeHtml(entry?.flags || "");
+                    const protoText = escapeHtml(proto);
+                    const searchBlob = `${{time}} ${{srcIp}} ${{srcPort}} ${{dstPort}} ${{protoText}} ${{flags}}`.toLowerCase();
+
+                    return `<tr data-search='${{escapeHtml(searchBlob)}}'><td>${{time}}</td><td class='ip-highlight'>${{srcIp}}</td><td>${{srcPort}}</td><td>${{dstPort}}</td><td class='${{protoClass}}'>${{protoText}}</td><td>${{flags}}</td></tr>`;
+                }}).join("");
+
+                return "<table id='packet-log-table'><thead><tr><th>Time</th><th>Source</th><th>SPort</th><th>DPort</th><th>Proto</th><th>Flags</th></tr></thead><tbody>" + body + "</tbody></table>";
+            }};
+
+            const refreshLiveData = async () => {{
+                try {{
+                    const [stateResp, scannersResp, logResp] = await Promise.all([
+                        fetch("/api/state", {{ cache: "no-store" }}),
+                        fetch("/api/scanners", {{ cache: "no-store" }}),
+                        fetch("/api/log", {{ cache: "no-store" }}),
+                    ]);
+
+                    if (!stateResp.ok || !scannersResp.ok || !logResp.ok) {{
+                        return;
+                    }}
+
+                    const stateData = await stateResp.json();
+                    const scannersData = await scannersResp.json();
+                    const logData = await logResp.json();
+
+                    if (refreshLastEl) refreshLastEl.textContent = stateData?.last_refresh || "never";
+                    if (refreshNextEl) refreshNextEl.textContent = stateData?.next_refresh || "pending";
+
+                    if (scannerSummaryEl) {{
+                        const scannerCount = Object.keys(scannersData || {{}}).length;
+                        scannerSummaryEl.textContent = `ACTIVE SCANNERS (${{scannerCount}})`;
+                    }}
+                    if (scannerTableEl) {{
+                        scannerTableEl.innerHTML = renderScannerTable(scannersData);
+                    }}
+
+                    const logCount = Array.isArray(logData) ? Math.min(100, logData.length) : 0;
+                    if (recentActivityEl) {{
+                        recentActivityEl.textContent = `Recent Activity (${{logCount}} packets)`;
+                    }}
+                    if (logTableEl) {{
+                        logTableEl.innerHTML = renderLogTable(logData);
+                    }}
+
+                    applyLogFilter();
+                }} catch (_) {{
+                    // Keep current content when refresh fails.
+                }}
+            }};
 
             const applyLogFilter = () => {{
                 const tableRows = document.querySelectorAll("#packet-log-table tbody tr");
@@ -1595,6 +1724,7 @@ curl http://{target_host}:{web_port}/api/tests       # test scenarios</pre>
             }}
 
             applyLogFilter();
+            setInterval(refreshLiveData, 10000);
         }})();
     </script>
 </body>
@@ -1813,7 +1943,7 @@ def normalize_target_selection(network, target_mode):
     mode = (target_mode or "ip").strip().lower()
     if net != "vpn":
         net = "vpn"
-    if mode not in ("ip", "address"):
+    if mode not in ("ip", "address", "ipv6"):
         mode = "ip"
     return net, mode
 
@@ -1822,6 +1952,8 @@ def resolve_scan_target(network, target_mode):
     net, mode = normalize_target_selection(network, target_mode)
     if mode == "address":
         return VPN_ADDR
+    if mode == "ipv6":
+        return SERVER_IPV6 or TARGET_HOST
     return VPN_HOST or TARGET_HOST
 
 
@@ -1908,17 +2040,23 @@ class Handler(BaseHTTPRequestHandler):
                     scanner_count = len(ip_summary)
                     log_count = min(MAX_LOG_WEB, len(conn_log))
 
+                api_ipv4_host = VPN_HOST or TARGET_HOST
+
                 html = HTML_TEMPLATE.format(
                     refresh_url=build_refresh_url(selected_network, selected_mode),
                     target_host=selected_target,
+                    api_ipv4_host=api_ipv4_host,
                     selected_target=selected_target,
+                    selected_network_value=selected_network,
+                    selected_mode_value=selected_mode,
                     selected_network_label="VPN",
-                    selected_mode_label="IP" if selected_mode == "ip" else "ADDRESS",
+                    selected_mode_label="IP" if selected_mode == "ip" else ("ADDRESS" if selected_mode == "address" else "IPV6"),
                     preset_vpn_ip_active="active" if selected_mode == "ip" else "",
                     preset_vpn_address_active="active" if selected_mode == "address" else "",
+                    preset_vpn_ipv6_active="active" if selected_mode == "ipv6" else "",
                     vpn_host=VPN_HOST or "none detected",
                     target_ipv6=SERVER_IPV6 or "none detected",
-                    interface=INTERFACE,
+                    interface=VPN_INTERFACE,
                     last_refresh=state["last_refresh"] or "never",
                     next_refresh=state["next_refresh"] or "pending",
                     web_port=WEB_PORT,
