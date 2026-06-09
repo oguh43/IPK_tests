@@ -16,6 +16,8 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <arpa/inet.h>
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -175,6 +177,9 @@ typedef struct {
     int reorder_delay_ms, jitter_ms;
     float corrupt_pct;
     int delay_ms;
+    float trunc_pct;
+    int hostile_n;
+    int oversized_n;
 } Impairment;
 
 typedef struct {
@@ -185,7 +190,14 @@ typedef struct {
     int timeout_w;
     int session_timeout;
     int repeat;
+    // cppcheck-suppress unusedStructMember
+    int _pad;
 } TestDef;
+
+// fancy utf chars
+#define UTF_ARROW "\xe2\x86\x92"
+#define UTF_PM "\xc2\xb1"
+#define UTF_DASH "\xe2\x80\x94"
 
 static void appendf(char *dst, size_t cap, size_t *used, const char *fmt, ...) {
     if (!dst || !used || cap == 0 || *used >= cap - 1) {
@@ -214,22 +226,21 @@ static const char *imp_desc(const Impairment *m, char *buf, size_t sz) {
     if (m->loss_pct > 0) appendf(t, sizeof t, &n, "%sloss=%.0f%%", n ? ", " : "", (double)m->loss_pct);
     if (m->dup_pct > 0) appendf(t, sizeof t, &n, "%sdup=%.0f%%", n ? ", " : "", (double)m->dup_pct);
     if (m->reorder_pct > 0) appendf(t, sizeof t, &n, "%sreorder=%.0f%%/%dms", n ? ", " : "", (double)m->reorder_pct, m->reorder_delay_ms);
-    if (m->jitter_ms > 0) appendf(t, sizeof t, &n, "%sjitter=\xc2\xb1%dms", n ? ", " : "", m->jitter_ms);
+    if (m->jitter_ms > 0) appendf(t, sizeof t, &n, "%sjitter=" UTF_PM "%dms", n ? ", " : "", m->jitter_ms);
     if (m->corrupt_pct > 0) appendf(t, sizeof t, &n, "%scorrupt=%.0f%%", n ? ", " : "", (double)m->corrupt_pct);
+    if (m->trunc_pct > 0) appendf(t, sizeof t, &n, "%struncate=%.0f%%", n ? ", " : "", (double)m->trunc_pct);
     if (m->delay_ms > 0) appendf(t, sizeof t, &n, "%sdelay=%dms", n ? ", " : "", m->delay_ms);
+    if (m->hostile_n > 0) appendf(t, sizeof t, &n, "%shostile=%d", n ? ", " : "", m->hostile_n);
+    if (m->oversized_n > 0) appendf(t, sizeof t, &n, "%soversized=%d", n ? ", " : "", m->oversized_n);
     snprintf(buf, sz, "%s", n ? t : "clean");
     return buf;
 }
 
-// initialiser - loss, dup, reorder, reorder_ms, jitter, corrupt, delay
-#define IMP(l,d,r,rm,j,c,dl) {(float)(l),(float)(d),(float)(r),(rm),(j),(float)(c),(dl)}
+// initialiser - loss, dup, reorder, reorder_ms, jitter, corrupt, delay, trunc, hostile, oversized
+#define IMPX(l,d,r,rm,j,c,dl,tr,ho,ov) {(float)(l),(float)(d),(float)(r),(rm),(j),(float)(c),(dl),(float)(tr),(ho),(ov)}
+#define IMP(l,d,r,rm,j,c,dl) IMPX(l,d,r,rm,j,c,dl,0,0,0)
 #define CLEAN IMP(0,0,0,50,0,0,0)
-#define TDEF(name,desc,imp,size,tw,to,rep) {(name),(desc),(size),imp,(tw),(to),(rep)}
-
-// fancy utf chars
-#define UTF_ARROW "\xe2\x86\x92"
-#define UTF_PM "\xc2\xb1"
-#define UTF_DASH "\xe2\x80\x94"
+#define TDEF(name,desc,imp,size,tw,to,rep) {(name),(desc),(size),imp,(tw),(to),(rep),0}
 
 static const TestDef TESTS[] = {
     TDEF("normal", "Clean channel, small file", CLEAN, 50000, 10,  60, 1),
@@ -253,6 +264,15 @@ static const TestDef TESTS[] = {
     TDEF("ipv6", "IPv6 loopback transfer", CLEAN, 30000, 10,  60, 1),
     TDEF("signal", "SIGTERM during idle " UTF_DASH " clean exit", CLEAN, 0, 10,  10, 1),
     TDEF("bad_args", "Invalid CLI arguments " UTF_ARROW " non-zero exit", CLEAN, 0, 10,  60, 1),
+    TDEF("corrupt_only", "A-CORRUPT: 3% corruption, 96 KiB", IMP(0,0,0,50,0,3,0), 98304, 12,  90, 1),
+    TDEF("truncate_only", "A-CORRUPT: 2% truncation, 96 KiB", IMPX(0,0,0,50,0,0,0,2,0,0), 98304, 12,  90, 1),
+    TDEF("corrupt_trunc", "A-CORRUPT: 3% corrupt + 2% truncate, 96 KiB", IMPX(0,0,0,50,0,3,0,2,0,0), 98304, 12,  90, 1),
+    TDEF("pipeline", "A-PIPELINE: RTT 100 ms, must pipeline within 5 s", IMP(0,0,0,50,0,0,50), 262144, 8,  5, 1),
+    TDEF("hostile", "A-HOSTILE: garbage datagrams injected, must ignore", IMPX(0,0,0,50,0,0,0,0,40,0), 80000, 12,  90, 1),
+    TDEF("oversized", "A-OVERSIZED-IGNORE: ~60 KB datagrams, must ignore", IMPX(0,0,0,50,0,0,0,0,0,4), 80000, 12,  90, 1),
+    TDEF("lifecycle", "A-LIFECYCLE: -w idle self-exit timing", CLEAN, 0, 10,  20, 1),
+    TDEF("bulk_32m", "A-BULK: 32 MiB clean transfer", CLEAN, 33554432, 30,  120, 1),
+    TDEF("help", "--help " UTF_ARROW " exit 0 with non-empty stdout", CLEAN, 0, 10,  10, 1),
     TDEF(NULL, NULL, CLEAN, 0, 0, 0, 0)
 };
 #define N_TESTS ((int)(sizeof(TESTS)/sizeof(TESTS[0]) - 1))
@@ -267,7 +287,7 @@ static const TestDef *find_test(const char *name) {
 }
 
 static int is_slow(const char *name) {
-    static const char *slow[] = {"large_1mb","large_5mb","timeout_test","loss_30",NULL};
+    static const char *slow[] = {"large_1mb","large_5mb","timeout_test","loss_30","bulk_32m","corrupt_only","truncate_only","corrupt_trunc",NULL};
     for (int i = 0; slow[i]; i++) {
         if (strcmp(name, slow[i]) == 0) {
             return 1;
@@ -317,18 +337,37 @@ static void fire_delayed(int sock_fd, const uint8_t *data, size_t len, const str
 }
 
 typedef struct {
-    int proxy_port, server_port;
     Impairment imp;
-    volatile int halt;
-    int sock_fd;
     struct sockaddr_in server_addr;
     struct sockaddr_in client_addr;
+    int proxy_port, server_port;
+    volatile int halt;
+    int sock_fd;
     int has_client;
+    int inj_hostile, inj_oversized;
+    // cppcheck-suppress unusedStructMember
+    int _ipad;
     pthread_t tid;
     // IOS HW; why isn't a mutex used here?
     long s_fwd, s_rev, s_fwd_b, s_rev_b;
-    long s_drop, s_dup, s_reorder, s_corrupt;
+    long s_drop, s_dup, s_reorder, s_corrupt, s_trunc, s_inject;
 } UDPProxy;
+
+// inject a datagram of random bytes toward dest (garbage you must ignore)
+static void inject_garbage(int sock_fd, const struct sockaddr_in *dest, size_t size) {
+    if (size == 0) {
+        size = 1;
+    }
+    uint8_t *g = malloc(size);
+    if (!g) {
+        return;
+    }
+    for (size_t i = 0; i < size; i++) {
+        g[i] = (uint8_t)(rand() & 0xff);
+    }
+    sendto(sock_fd, g, size, 0, (const struct sockaddr *)dest, sizeof *dest);
+    free(g);
+}
 
 static void proxy_relay(UDPProxy *px, const uint8_t *data, size_t len, const struct sockaddr_in *dest, int is_fwd) {
     /*
@@ -352,6 +391,16 @@ static void proxy_relay(UDPProxy *px, const uint8_t *data, size_t len, const str
         px->s_corrupt++;
     }
 
+    // truncation
+    size_t send_len = len;
+    if (px->imp.trunc_pct > 0.0f && len > 4 &&
+        (double)rand() / RAND_MAX * 100.0 < (double)px->imp.trunc_pct) {
+        size_t maxchop = len / 2;
+        size_t chop = 1u + (size_t)(rand() % (int)maxchop);
+        send_len = len - chop;
+        px->s_trunc++;
+    }
+
     // delay, jitter, reorder
     double delay = px->imp.delay_ms / 1000.0;
     if (px->imp.jitter_ms > 0) {
@@ -368,21 +417,33 @@ static void proxy_relay(UDPProxy *px, const uint8_t *data, size_t len, const str
 
     int delay_us = (int)(delay * 1e6);
     if (delay_us > 1000) {
-        fire_delayed(px->sock_fd, pkt, len, dest, delay_us);
+        fire_delayed(px->sock_fd, pkt, send_len, dest, delay_us);
     } else {
-        sendto(px->sock_fd, pkt, len, 0, (const struct sockaddr *)dest, sizeof *dest);
+        sendto(px->sock_fd, pkt, send_len, 0, (const struct sockaddr *)dest, sizeof *dest);
     }
 
     // duplication
     if (px->imp.dup_pct > 0.0f && (double)rand() / RAND_MAX * 100.0 < (double)px->imp.dup_pct) {
         double d2 = delay + 0.003 + (double)rand() / RAND_MAX * 0.022;
-        fire_delayed(px->sock_fd, pkt, len, dest, (int)(d2 * 1e6));
+        fire_delayed(px->sock_fd, pkt, send_len, dest, (int)(d2 * 1e6));
         px->s_dup++;
     }
 
     free(pkt);
 
     if (is_fwd) {
+        // garbage injection toward server
+        if (px->inj_oversized > 0) {
+            inject_garbage(px->sock_fd, dest, 60000);
+            px->inj_oversized--;
+            px->s_inject++;
+        }
+        if (px->inj_hostile > 0 && (rand() % 4 == 0)) {
+            inject_garbage(px->sock_fd, dest, 20u + (size_t)(rand() % 40));
+            px->inj_hostile--;
+            px->s_inject++;
+        }
+
         px->s_fwd++;
         px->s_fwd_b += (long)len;
     } else {
@@ -447,6 +508,8 @@ static int proxy_start(UDPProxy *px, int proxy_port, int server_port, const Impa
     px->server_port = server_port;
     px->imp = *imp;
     px->sock_fd = -1;
+    px->inj_hostile = imp->hostile_n;
+    px->inj_oversized = imp->oversized_n;
 
     px->server_addr.sin_family = AF_INET;
     px->server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -681,7 +744,6 @@ static void drain_stderr(int stderr_fd, const char *label, int verbose) {
 
 
 // input generation + fmt_bytes
-
 static uint8_t *gen_input(const TestDef *td, size_t *len) {
     if (strcmp(td->name, "tiny") == 0) {
         *len = 1;
@@ -763,6 +825,7 @@ static const char *fmt_bytes(long n, char *buf, size_t sz) {
 typedef struct {
     long input_size, output_size, first_diff;
     long p_fwd, p_rev, p_drop, p_dup, p_reorder, p_corrupt;
+    long p_trunc, p_inject;
     int client_exit, server_exit;
     int has_diff, skipped;
     int exit_code;
@@ -825,6 +888,24 @@ static Res res_failf(const Det *d, const char *fmt, ...) {
     return r;
 }
 
+static Res res_okf(const Det *d, const char *fmt, ...) {
+    Res r = {0};
+    r.ok = 1;
+    if (d) {
+        r.d = *d;
+    } else {
+        memset(&r.d, 0, sizeof r.d);
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(r.msg, MAX_MSG, fmt, ap);
+    va_end(ap);
+    r.pad = 0;
+    r.d.pad = 0;
+    memset(r.d.sha_pad, 0, sizeof r.d.sha_pad);
+    return r;
+}
+
 static Res res_skip(const char *msg) {
     Res r = {0};
     r.ok = 1;
@@ -841,6 +922,7 @@ static Res res_skip(const char *msg) {
 static Res run_standard(const char *binary, const TestDef *td, const char *tmpdir, int verbose, int port_base) {
     static Det d;
     memset(&d, 0, sizeof d);
+    (void)td->_pad;
     int ports[2];
     if (find_free_ports(2, port_base, ports) < 0) {
         return res_fail("No free ports", &d);
@@ -881,6 +963,7 @@ static Res run_standard(const char *binary, const TestDef *td, const char *tmpdi
         free(in_data);
         return res_fail("Proxy bind failed", &d);
     }
+    (void)px->_ipad;
 
     // start server
     char pw[16], sp[16]; snprintf(pw,sizeof pw,"%d",td->timeout_w);
@@ -944,6 +1027,7 @@ static Res run_standard(const char *binary, const TestDef *td, const char *tmpdi
     d.p_fwd = px->s_fwd; d.p_rev = px->s_rev;
     d.p_drop = px->s_drop; d.p_dup = px->s_dup;
     d.p_reorder = px->s_reorder; d.p_corrupt = px->s_corrupt;
+    d.p_trunc = px->s_trunc; d.p_inject = px->s_inject;
     free(px);
 
     if (!cli_done || !srv_done) {
@@ -1020,6 +1104,7 @@ static Res run_standard(const char *binary, const TestDef *td, const char *tmpdi
 // stdin - stdout test
 static Res run_stdin_stdout(const char *binary, const TestDef *td, int verbose, int port_base) {
     Det d = {0};
+    (void)td->_pad;
     int ports[2];
     if (find_free_ports(2, port_base, ports) < 0) {
         return res_fail("No free ports", &d);
@@ -1035,6 +1120,7 @@ static Res run_stdin_stdout(const char *binary, const TestDef *td, int verbose, 
 
     UDPProxy px;
     proxy_start(&px, proxy_port, server_port, &td->imp);
+    (void)px._ipad;
 
     char pw[16], sp[16]; snprintf(pw,sizeof pw,"%d",td->timeout_w);
     snprintf(sp, sizeof sp, "%d", server_port);
@@ -1271,6 +1357,118 @@ static Res run_signal_test(const char *binary, int verbose, int port_base) {
     return res_ok("Clean SIGTERM handling",&d);
 }
 
+// help conformance; exit 0 with non-empty stdout
+static Res run_help(const char *binary, int verbose) {
+    Det d = {0};
+    const char *argv[] = {binary, "--help", NULL};
+    Proc p;
+    if (proc_spawn(&p, argv, STDIO_DEVNULL, STDIO_PIPE, STDIO_PIPE) < 0) {
+        return res_fail("Failed to spawn process", &d);
+    }
+    drain_stderr(p.stderr_fd, "help", verbose);
+
+    int flags = fcntl(p.stdout_fd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(p.stdout_fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    static char obuf[8192];
+    size_t got = 0;
+    double deadline = now() + 5.0;
+    while (now() < deadline) {
+        if (got < sizeof obuf - 1) {
+            ssize_t r = read(p.stdout_fd, obuf + got, sizeof obuf - 1 - got);
+            if (r > 0) {
+                got += (size_t)r;
+                continue;
+            }
+        }
+        if (proc_poll(&p)) {
+            ssize_t r;
+            while (got < sizeof obuf - 1 && (r = read(p.stdout_fd, obuf + got, sizeof obuf - 1 - got)) > 0) {
+                got += (size_t)r;
+            }
+            break;
+        }
+        usleep(20000);
+    }
+
+    int finished = proc_poll(&p);
+    if (!finished) {
+        proc_terminate(&p);
+        if (p.stdout_fd >= 0) {
+            close(p.stdout_fd);
+        }
+        return res_fail("--help did not exit within 5s", &d);
+    }
+    if (p.stdout_fd >= 0) {
+        close(p.stdout_fd);
+    }
+    d.exit_code = p.returncode;
+    d.output_size = (long)got;
+    if (p.returncode != 0) {
+        return res_failf(&d, "--help exited with code %d (expected 0)", p.returncode);
+    }
+    if (got == 0) {
+        return res_fail("--help produced no stdout output", &d);
+    }
+    return res_ok("--help exits 0 with usage text", &d);
+}
+
+// time how long an idle server runs before self-exiting under -w
+static double measure_idle_exit(const char *binary, int port, int w, double cap, int *exited_ok, int verbose) {
+    char sp[16], pw[16];
+    snprintf(sp, sizeof sp, "%d", port);
+    snprintf(pw, sizeof pw, "%d", w);
+    const char *srv_argv[] = {binary, "-s", "-p", sp, "-a", "127.0.0.1", "-w", pw, NULL};
+    Proc srv;
+    if (proc_spawn(&srv, srv_argv, STDIO_DEVNULL, STDIO_DEVNULL, STDIO_PIPE) < 0) {
+        *exited_ok = 0;
+        return -1.0;
+    }
+    drain_stderr(srv.stderr_fd, "srv", verbose);
+    double t0 = now();
+    double deadline = t0 + cap;
+    while (now() < deadline) {
+        if (proc_poll(&srv)) {
+            *exited_ok = 1;
+            return now() - t0;
+        }
+        usleep(20000);
+    }
+    proc_terminate(&srv);
+    *exited_ok = 0;
+    return now() - t0;
+}
+
+// -w idle timeout must be honored (w=3 self-exits later than w=1)
+static Res run_lifecycle(const char *binary, int verbose, int port_base) {
+    Det d = {0};
+    int ports[2];
+    if (find_free_ports(2, port_base, ports) < 0) {
+        return res_fail("No free ports", &d);
+    }
+    int ok1 = 0, ok3 = 0;
+    double t1 = measure_idle_exit(binary, ports[0], 1, 6.0, &ok1, verbose);
+    double t3 = measure_idle_exit(binary, ports[1], 3, 10.0, &ok3, verbose);
+
+    if (!ok1) {
+        return res_failf(&d, "Server with -w 1 did not self-exit (waited %.1fs)", t1);
+    }
+    if (!ok3) {
+        return res_failf(&d, "Server with -w 3 did not self-exit (waited %.1fs)", t3);
+    }
+    // real idle timeout makes -w 3 outlast -w 1 by ~2s
+    // impls that exit immediately show diff ~0.00s
+    if (t3 - t1 < 1.0) {
+        return res_failf(&d, "-w not honored: exit times too close (w1=%.2fs, w3=%.2fs)", t1, t3);
+    }
+    if (t1 > 3.0) {
+        return res_failf(&d, "-w 1 idle exit too slow (%.2fs, expected ~1s)", t1);
+    }
+    return res_okf(&d, "Idle -w timeout honored (w1=%.2fs, w3=%.2fs)", t1, t3);
+}
+
 // bad-args test
 static Res run_bad_args(const char *binary) {
     Det d = {0};
@@ -1281,6 +1479,8 @@ static Res run_bad_args(const char *binary) {
         { {"-c","-p","9000",NULL}, "client without -a" },
         { {"-s",NULL}, "server without -p" },
         { {"-c","-a","127.0.0.1",NULL}, "client without -p" },
+        { {"-c","-a","127.0.0.1","-p","9000","-w","0",NULL}, "non-positive -w 0" },
+        { {"-c","-a","127.0.0.1","-p","9000","-w","-1",NULL}, "negative -w -1" },
     };
     int n = (int)(sizeof cases / sizeof cases[0]);
 
@@ -1328,6 +1528,10 @@ static Res run_single(const char *binary, const TestDef *td, int verbose, int po
         res = run_signal_test(binary,verbose,port_base);
     } else if (strcmp(td->name,"bad_args" )==0) {
         res = run_bad_args(binary);
+    } else if (strcmp(td->name,"lifecycle" )==0) {
+        res = run_lifecycle(binary,verbose,port_base);
+    } else if (strcmp(td->name,"help" )==0) {
+        res = run_help(binary,verbose);
     } else {
         res = run_standard(binary,td,tmpdir,verbose,port_base);
     }
@@ -1345,6 +1549,183 @@ static Res run_single(const char *binary, const TestDef *td, int verbose, int po
 }
 
 // help
+static int valid_shell_name(const char *s) {
+    static const char *v[] = {"c","clisp","csharp","go","java","python","rust","zig",NULL};
+    for (int i = 0; v[i]; i++) {
+        if (strcmp(s, v[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// submission PATH : validate archive structure, do not run binary tests
+static int run_submission(const char *zippath) {
+    static char tmpl[] = "/tmp/ipk-rdt-sub-XXXXXX";
+    static char cmd[8192];
+    static char root[3072];
+    static char path[4096];
+    static char line[1024];
+    int fails = 0, warns = 0;
+
+    printf("\n  %s\n", BOLD("IPK-RDT Submission Structure Check"));
+    printf("  %s %s\n\n", DIM("Archive:"), zippath);
+
+    // 1) archive filename
+    const char *base = strrchr(zippath, '/');
+    base = base ? base + 1 : zippath;
+    size_t blen = strlen(base);
+    int name_ok = 0;
+    if (blen > 4 && strcmp(base + blen - 4, ".zip") == 0) {
+        size_t stem = blen - 4;
+        if (stem == 6) {
+            int alld = 1;
+            for (size_t i = 0; i < stem; i++) {
+                if (!isdigit((unsigned char)base[i])) { alld = 0; break; }
+            }
+            if (alld) name_ok = 1; // 123456.zip
+        }
+        if (stem >= 3 && base[0] == 'x' &&
+            isalpha((unsigned char)base[1]) &&
+            isdigit((unsigned char)base[stem - 1]) &&
+            isdigit((unsigned char)base[stem - 2])) {
+            name_ok = 1; // xlogin00.zip
+        }
+    }
+    if (name_ok) {
+        printf("  %s  archive name '%s' matches xlogin00.zip / 123456.zip\n", GREEN("PASS"), base);
+    } else {
+        printf("  %s  archive name '%s' must be xlogin00.zip or 123456.zip (NOT x123456.zip)\n", RED("FAIL"), base);
+        fails++;
+    }
+
+    // 2) extract
+    if (system("command -v unzip >/dev/null 2>&1") != 0) {
+        printf("  %s  'unzip' not available; cannot inspect archive contents\n", YELLOW("WARN"));
+        printf("\n  %s (%d failure%s, %d warning%s)\n\n", BOLD("Result:"), fails, fails == 1 ? "" : "s", warns + 1, "s");
+        return fails > 0 ? 1 : 0;
+    }
+    if (!mkdtemp(tmpl)) {
+        printf("  %s  could not create temp dir for extraction\n", RED("FAIL"));
+        return 1;
+    }
+    snprintf(cmd, sizeof cmd, "unzip -q -o '%s' -d '%s' >/dev/null 2>&1", zippath, tmpl);
+    if (system(cmd) != 0) {
+        printf("  %s  failed to unzip archive (is it a valid zip?)\n", RED("FAIL"));
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", tmpl);
+        if (system(cmd) != 0) { /* best effort */ }
+        printf("\n  %s (%d failure%s)\n\n", BOLD("Result:"), fails + 1, "s");
+        return 1;
+    }
+
+    // 3) nested wrapper directory
+    snprintf(root, sizeof root, "%s", tmpl);
+    DIR *dp = opendir(tmpl);
+    int entries = 0;
+    char only[256] = "";
+    if (dp) {
+        const struct dirent *de;
+        while ((de = readdir(dp)) != NULL) {
+            if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
+                continue;
+            }
+            entries++;
+            if (entries == 1) {
+                snprintf(only, sizeof only, "%s", de->d_name);
+            }
+        }
+        closedir(dp);
+    }
+    if (entries == 1 && only[0]) {
+        snprintf(path, sizeof path, "%s/%s", tmpl, only);
+        struct stat sst;
+        if (stat(path, &sst) == 0 && S_ISDIR(sst.st_mode)) {
+            snprintf(path, sizeof path, "%s/Makefile", tmpl);
+            struct stat mtop;
+            if (stat(path, &mtop) != 0) {
+                printf("  %s  archive wraps all files in a nested '%s/' directory\n", RED("FAIL"), only);
+                fails++;
+                snprintf(root, sizeof root, "%s/%s", tmpl, only);
+            }
+        }
+    }
+
+    // 4) Makefile at root
+    snprintf(path, sizeof path, "%s/Makefile", root);
+    struct stat mst;
+    int have_makefile = (stat(path, &mst) == 0);
+    if (have_makefile) {
+        printf("  %s  Makefile present at archive root\n", GREEN("PASS"));
+    } else {
+        printf("  %s  no Makefile at archive root\n", RED("FAIL"));
+        fails++;
+    }
+
+    // 5) `make environment` target
+    if (have_makefile) {
+        snprintf(cmd, sizeof cmd, "cd '%s' && timeout 15 make environment 2>/dev/null", root);
+        FILE *mp = popen(cmd, "r");
+        if (!mp) {
+            printf("  %s  could not run 'make environment'\n", RED("FAIL"));
+            fails++;
+        } else {
+            int saw_echo = 0, nlines = 0;
+            char lastname[1024];
+            lastname[0] = '\0';
+            while (fgets(line, sizeof line, mp)) {
+                size_t n = strlen(line);
+                while (n && (line[n-1]=='\n' || line[n-1]=='\r' || line[n-1]==' ' || line[n-1]=='\t')) {
+                    line[--n] = '\0';
+                }
+                if (n == 0) {
+                    continue;
+                }
+                nlines++;
+                if (strncmp(line, "echo", 4u) == 0) {
+                    saw_echo = 1;
+                }
+                snprintf(lastname, sizeof lastname, "%s", line);
+            }
+            if (pclose(mp) == -1) { /* ignore */ }
+            if (saw_echo) {
+                printf("  %s  'environment' echoes the command line " UTF_DASH " missing '@' prefix on echo\n", RED("FAIL"));
+                fails++;
+            } else if (nlines == 0) {
+                printf("  %s  'environment' target produced no output\n", RED("FAIL"));
+                fails++;
+            } else if (!valid_shell_name(lastname)) {
+                printf("  %s  'environment' printed '%s' (must be: c clisp csharp go java python rust zig)\n", RED("FAIL"), lastname);
+                fails++;
+            } else {
+                printf("  %s  'environment' prints valid nix shell '%s'\n", GREEN("PASS"), lastname);
+            }
+        }
+    }
+
+    // 6) recommended files
+    snprintf(path, sizeof path, "%s/LICENSE", root);
+    if (stat(path, &mst) != 0) {
+        printf("  %s  LICENSE not found at root\n", YELLOW("WARN")); warns++;
+    }
+    snprintf(path, sizeof path, "%s/CHANGELOG.md", root);
+    if (stat(path, &mst) != 0) {
+        printf("  %s  CHANGELOG.md not found at root\n", YELLOW("WARN")); warns++;
+    }
+
+    // cleanup + verdict
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", tmpl);
+    if (system(cmd) != 0) { /* best effort */ }
+
+    printf("\n  %s ", BOLD("Result:"));
+    if (fails == 0) {
+        printf("%s", GREEN("structure OK"));
+    } else {
+        printf("%s", RED("structure problems"));
+    }
+    printf("  (%d failure%s, %d warning%s)\n\n", fails, fails == 1 ? "" : "s", warns, warns == 1 ? "" : "s");
+    return fails > 0 ? 1 : 0;
+}
+
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [OPTIONS]\n"
@@ -1355,6 +1736,7 @@ static void usage(const char *prog) {
         "  -v, --verbose          Show stderr from ipk-rdt processes\n"
         "      --port-base N      Base UDP port  (default: 20000)\n"
         "  -f, --fast             Skip slow tests (large files, high loss)\n"
+        "      --submission ZIP   Validate submission archive structure and exit\n"
         "  -h, --help             Show this help\n"
         "\n"
         "Examples:\n"
@@ -1377,12 +1759,14 @@ int main(int argc, char *argv[]) {
         {"verbose", no_argument, NULL, 'v'},
         {"port-base", required_argument, NULL, 'P'},
         {"fast", no_argument, NULL, 'f'},
+        {"submission", required_argument, NULL, 'S'},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
     };
 
     const char *binary = "./ipk-rdt";
     const char *test_arg = NULL;
+    const char *submission = NULL;
     int list_mode = 0, verbose = 0, fast = 0, port_base = 20000;
     int opt;
     while ((opt = getopt_long(argc, argv, "b:t:lvfhP:", lopts, NULL)) != -1) {
@@ -1393,9 +1777,15 @@ int main(int argc, char *argv[]) {
             case 'v': verbose = 1; break;
             case 'P': port_base = atoi(optarg); break;
             case 'f': fast = 1; break;
+            case 'S': submission = optarg; break;
             case 'h': usage(argv[0]); return 0;
             default: usage(argv[0]); return 1;
         }
+    }
+
+    // submission structure check runs standalone (no binary needed)
+    if (submission) {
+        return run_submission(submission);
     }
 
     // list tests
@@ -1430,7 +1820,7 @@ int main(int argc, char *argv[]) {
         printf("  Try: chmod +x %s\n\n", binary);
         return 1;
     }
-    
+
     char *abs_binary = malloc(4096);
     if (abs_binary && realpath(binary, abs_binary)) binary = abs_binary;
 
@@ -1549,8 +1939,8 @@ int main(int argc, char *argv[]) {
 
         /* Proxy stats (verbose) */
         if (verbose && run_res->d.p_fwd + run_res->d.p_rev > 0) {
-            char ps[128];
-            snprintf(ps, sizeof ps, "proxy: %ld-> %ld<- pkts, dropped=%ld duped=%ld reordered=%ld corrupted=%ld", run_res->d.p_fwd, run_res->d.p_rev, run_res->d.p_drop, run_res->d.p_dup, run_res->d.p_reorder, run_res->d.p_corrupt);
+            char ps[192];
+            snprintf(ps, sizeof ps, "proxy: %ld-> %ld<- pkts, dropped=%ld duped=%ld reordered=%ld corrupted=%ld truncated=%ld injected=%ld", run_res->d.p_fwd, run_res->d.p_rev, run_res->d.p_drop, run_res->d.p_dup, run_res->d.p_reorder, run_res->d.p_corrupt, run_res->d.p_trunc, run_res->d.p_inject);
             printf("         %s\n", DIM(ps));
         }
 
